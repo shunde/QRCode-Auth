@@ -1,28 +1,33 @@
 package main
 
 import (
-	"bytes"
+	//"bytes"
 	"github.com/gorilla/mux"
 	"github.com/rif/cache2go"
-	"github.com/shunde/QRCode-Auth/qr"
+	//"github.com/shunde/QRCode-Auth/qrcode"
 	"github.com/shunde/QRCode-Auth/uuid"
-	"image/jpeg"
+	"github.com/shunde/rsc/qr"
+	//"image/png"
 	"log"
 	"net/http"
 	"time"
 )
 
-type qrenCode struct {
-	name string
-	data []byte
+type qrenCodeInfo struct {
+	name   string
+	data   []byte
+	isScan bool
+}
+
+type token struct {
 }
 
 var (
 	cache   *cache2go.CacheTable
-	urlBase string = "http://localhost:8080/login/"
+	urlBase string = "http://localhost:8080/l/"
 )
 
-func index(w http.ResponseWriter, r *http.Request) {
+func Index(w http.ResponseWriter, r *http.Request) {
 	if r.Method == "GET" {
 		w.WriteHeader(http.StatusOK)
 		var uid []byte
@@ -32,47 +37,50 @@ func index(w http.ResponseWriter, r *http.Request) {
 				break
 			}
 		}
-		m := qr.Encode(urlBase + string(uid))
-		var buf bytes.Buffer
-		jpeg.Encode(&buf, m, nil)
+
+		c, _ := qr.Encode(urlBase+string(uid), qr.H)
 
 		var value qrenCode
-		value.name = string(uid)
-		value.data = buf.Bytes()
+		value.name = string(uid) + ".png"
+		value.data = c.PNG()
 
 		cache.Cache(string(uid), 5*time.Minute, &value)
+
 		w.Write(uid)
 	}
 }
 
-func login(w http.ResponseWriter, r *http.Request) {
+func Login(w http.ResponseWriter, r *http.Request) {
 	if r.Method == "GET" {
 
 	}
 }
 
-func qrcode(w http.ResponseWriter, r *http.Request) {
+func Qrcode(w http.ResponseWriter, r *http.Request) {
+	qrcodeName := r.URL.Path[len("/qrcode/"):]
+	res, err := cache.Value(qrcodeName)
+
+	if err != nil {
+		w.WriteHeader(http.StatusNotFound)
+		w.Write([]byte("404 NotFound"))
+		return
+	}
+
 	if r.Method == "GET" {
-		qrcodeName := r.URL.Path[len("/qrcode/"):]
-		res, err := cache.Value(qrcodeName)
-
-		if err != nil {
-			w.WriteHeader(http.StatusNotFound)
-			w.Write([]byte("404 NotFound"))
-			return
-		}
-
-		w.Header().Add("Content-Type", "image/jpeg")
-		w.Write(res.Data().(*qrenCode).data)
+		w.Header().Add("Content-Type", "image/png")
+		w.Write(res.Data().(*qrenCodeInfo).data)
+	} else if r.Method == "POST" {
+		// mark qrcode scaned
+		res.Data().(*qrenCodeInfo).isScan = true
 	}
 }
 
 func main() {
 	cache = cache2go.Cache("table")
 	r := mux.NewRouter()
-	r.HandleFunc("/", index)
-	r.HandleFunc("/qrcode/{name}", qrcode)
-	r.HandleFunc("/login/{uid}", login)
+	r.HandleFunc("/", Index)
+	r.HandleFunc("/qrcode/{name}", Qrcode)
+	r.HandleFunc("/l/{uid}", Login)
 	http.Handle("/", r)
 	err := http.ListenAndServe(":8080", nil)
 	if err != nil {
