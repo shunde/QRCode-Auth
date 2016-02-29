@@ -2,7 +2,6 @@ package uuid
 
 import (
 	"math/rand"
-	//"time"
 )
 
 const (
@@ -11,9 +10,20 @@ const (
 )
 
 func NewUuid() []byte {
-	uid := make([]byte, size)
-	//rand.Seed(time.Now().UnixNano())
-	for i := 0; i < size; i++ {
+	return randStr(size)
+}
+
+func NewUuidN(n int) []byte {
+	if n <= 0 {
+		return NewUuid()
+	}
+	return randStr(n)
+}
+
+func randStr(n int) []byte {
+	uid := make([]byte, n)
+
+	for i := 0; i < n; i++ {
 		uid[i] = alphaNum[rand.Intn(len(alphaNum))]
 	}
 	return uid

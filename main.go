@@ -9,6 +9,8 @@ import (
 	"io/ioutil"
 	"log"
 	"net/http"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -16,15 +18,30 @@ type qrenCodeInfo struct {
 	name   string
 	data   []byte
 	scan   chan bool
+	auth   chan bool
 	isScan bool
+	scanBy string
+	token  string
 }
 
-type token struct {
+type tokenInfo struct {
+	ID         string // user ID
+	deviceID   string
+	timestamp  time.Time
+	expireTime time.Time
+}
+
+type userInfo struct {
+	name   string
+	avatar []byte
+	token  string
 }
 
 var (
-	cache   *cache2go.CacheTable
-	urlBase string = "http://localhost:8080/l/"
+	cache      *cache2go.CacheTable // uuid ==> qrenCodeInfo
+	urlBase    string               = "http://localhost:8080/l/"
+	tokenCache *cache2go.CacheTable // token ==> tokenInfo
+	userCache  *cache2go.CacheTable // user ==> token
 )
 
 func JsLogin(w http.ResponseWriter, r *http.Request) {
@@ -70,10 +87,20 @@ func Index(w http.ResponseWriter, r *http.Request) {
 }
 
 func ScanQRCode(w http.ResponseWriter, r *http.Request) {
-	if r.Method == "GET" {
-		uid := r.URL.Path[len("/l/"):]
-		fmt.Printf("scan request from uuid=%s\n", uid)
-		res, err := cache.Value(uid)
+	if r.Method == "POST" {
+		r.ParseForm()
+		uuid := r.URL.Path[len("/l/"):]
+		userID := r.FormValue("userID")
+		fmt.Printf("user request from #%s#\n", userID)
+		fmt.Printf("userCache: %d\n", userCache.Count())
+		userinfo, err := userCache.Value(strings.TrimSpace(userID))
+		if err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			w.Write([]byte("Invalid User!"))
+			return
+		}
+		fmt.Printf("scan request for uuid=%s from user %s\n", uuid, userinfo.Data().(*userInfo).name)
+		res, err := cache.Value(uuid)
 		if err != nil {
 			w.WriteHeader(http.StatusNotFound)
 			w.Write([]byte("404 NotFound"))
@@ -86,6 +113,10 @@ func ScanQRCode(w http.ResponseWriter, r *http.Request) {
 		}
 		res.Data().(*qrenCodeInfo).scan <- true
 		res.Data().(*qrenCodeInfo).isScan = true
+		if res.Data().(*qrenCodeInfo).auth == nil {
+			res.Data().(*qrenCodeInfo).auth = make(chan bool)
+			res.Data().(*qrenCodeInfo).scanBy = userID
+		}
 		w.Write([]byte("scan success!"))
 		fmt.Println("scan success!")
 	}
@@ -116,7 +147,7 @@ func Login(w http.ResponseWriter, r *http.Request) {
 					w.WriteHeader(http.StatusOK)
 					w.Header().Set("Content-Type", "application/javascript")
 					w.Write([]byte("window.code=201;"))
-					return
+					// todo: add scanby info and user avatar
 				case <-time.After(20 * time.Second):
 					w.WriteHeader(http.StatusOK)
 					w.Header().Set("Content-Type", "application/javascript")
@@ -125,7 +156,25 @@ func Login(w http.ResponseWriter, r *http.Request) {
 			}
 			return
 		} else if tip == "1" { // query authorization status
-			// todo
+			select {
+			case <-res.Data().(*qrenCodeInfo).auth:
+				// get token
+				// del uuid in cache
+				token := res.Data().(*qrenCodeInfo).token
+				cache.Delete(uuid)
+				w.WriteHeader(http.StatusOK)
+				w.Header().Set("Content-Type", "application/javascript")
+				resp := "window.code=201; window.token='%s'"
+				resp = fmt.Sprintf(resp, token)
+				w.Write([]byte(resp))
+
+			case <-time.After(20 * time.Second):
+				w.WriteHeader(http.StatusOK)
+				w.Header().Set("Content-Type", "application/javascript")
+				w.Write([]byte("window.code=408;"))
+
+			}
+			return
 		}
 	}
 
@@ -147,11 +196,34 @@ func Qrcode(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func main() {
+func initServer() {
 	cache = cache2go.Cache("table")
 	cache.SetAboutToDeleteItemCallback(func(e *cache2go.CacheItem) {
 		close(e.Data().(*qrenCodeInfo).scan)
+		ch := e.Data().(*qrenCodeInfo).auth
+		if ch != nil {
+			close(ch)
+		}
 	})
+
+	tokenCache = cache2go.Cache("tokenCache")
+	userCache = cache2go.Cache("userCache")
+}
+func predefineUser() {
+	users := []*userInfo{
+		&userInfo{name: "张三"},
+		&userInfo{name: "李四"},
+		&userInfo{name: "隔壁老王"},
+	}
+
+	for i := 0; i < len(users); i++ {
+		userCache.Cache(strconv.Itoa(i), 0, users[i])
+	}
+}
+
+func main() {
+	initServer()
+	predefineUser()
 
 	r := mux.NewRouter()
 	r.HandleFunc("/", Index)
