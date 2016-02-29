@@ -1,0 +1,62 @@
+<html>
+<head>
+<title>模拟微信网页登录</title>
+<script src="https://ajax.googleapis.com/ajax/libs/angularjs/1.4.5/angular.min.js"></script>
+</head>
+<body ng-app="myApp">
+<div class="login" ng-controller="loginController" ng-if="true">
+    <div class="login_box" ng-hide='isScan'>
+        <div class="qrcode">
+            <img class="img" ng-src="{{qrcodeUrl}}" src="/res/loading.gif"/>
+            <p class="sub_title">扫描二维码登录</p>
+        </div>
+    </div>
+    <div class="avatar" ng-show='isScan'>
+        <img class="img" ng-src="{{userAvatar}}" src="/res/loading.gif"/>
+        <h4 class="sub_title">扫描成功</h4>
+        <p class="tips">请在手机上点击确认以登录</p>
+    </div>
+</div>
+<script type="text/javascript">
+var app = angular.module('myApp', []);
+
+app.controller('loginController', function($scope, $http, $timeout) {
+    $scope.isScan = false;
+
+    var newUuid = function() {
+        $http({
+            method: 'GET',
+            url: '/jslogin'
+        }).success(function(response, status, headers, config) {            
+            eval(response);      
+            $scope.qrcodeUrl = '/qrcode/' + window.uuid;
+            longPool();                         
+        });
+    };
+
+    var tryCount = 0;
+
+    var longPool = function() {
+        $http({
+            method: 'GET',
+            url: '/login?uuid=' + window.uuid + '&tip=0'
+        }).success(function(response, status, headers, config) {
+            eval(response);
+            if (window.code == 201) {
+                $scope.isScan = true;
+            } else if (window.code == 408) {
+                tryCount++;
+                if (tryCount == 5) {
+                    newUuid();
+                } else {
+                    $timeout(longPool, 200);
+                }                
+            }
+        });
+    } 
+    newUuid();    
+});
+</script>
+</body>
+</html>
+

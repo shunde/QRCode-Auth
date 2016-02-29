@@ -1,13 +1,12 @@
 package main
 
 import (
-	//"bytes"
+	"fmt"
 	"github.com/gorilla/mux"
 	"github.com/rif/cache2go"
-	//"github.com/shunde/QRCode-Auth/qrcode"
 	"github.com/shunde/QRCode-Auth/uuid"
 	"github.com/shunde/rsc/qr"
-	//"image/png"
+	"io/ioutil"
 	"log"
 	"net/http"
 	"time"
@@ -16,6 +15,7 @@ import (
 type qrenCodeInfo struct {
 	name   string
 	data   []byte
+	scan   chan bool
 	isScan bool
 }
 
@@ -27,7 +27,7 @@ var (
 	urlBase string = "http://localhost:8080/l/"
 )
 
-func Index(w http.ResponseWriter, r *http.Request) {
+func JsLogin(w http.ResponseWriter, r *http.Request) {
 	if r.Method == "GET" {
 		w.WriteHeader(http.StatusOK)
 		var uid []byte
@@ -40,47 +40,126 @@ func Index(w http.ResponseWriter, r *http.Request) {
 
 		c, _ := qr.Encode(urlBase+string(uid), qr.H)
 
-		var value qrenCode
+		var value qrenCodeInfo
 		value.name = string(uid) + ".png"
 		value.data = c.PNG()
+		value.scan = make(chan bool)
 
 		cache.Cache(string(uid), 5*time.Minute, &value)
 
-		w.Write(uid)
+		respTpl := "window.code=%d; window.uuid='%s';"
+		resp := fmt.Sprintf(respTpl, 200, string(uid))
+
+		w.Header().Set("Content-Type", "application/javascript")
+		w.Write([]byte(resp))
+		w.WriteHeader(http.StatusOK)
+	}
+}
+
+func Index(w http.ResponseWriter, r *http.Request) {
+	dat, err := ioutil.ReadFile("login.html")
+	if err != nil {
+		w.WriteHeader(http.StatusNotImplemented)
+		w.Write([]byte("Not Implemented."))
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/html")
+	w.Write(dat)
+	w.Header().Set("Content-Length", string(len(dat)))
+}
+
+func ScanQRCode(w http.ResponseWriter, r *http.Request) {
+	if r.Method == "GET" {
+		uid := r.URL.Path[len("/l/"):]
+		fmt.Printf("scan request from uuid=%s\n", uid)
+		res, err := cache.Value(uid)
+		if err != nil {
+			w.WriteHeader(http.StatusNotFound)
+			w.Write([]byte("404 NotFound"))
+			return
+		}
+		if res.Data().(*qrenCodeInfo).isScan {
+			w.WriteHeader(http.StatusBadRequest)
+			w.Write([]byte("Bad Request"))
+			return
+		}
+		res.Data().(*qrenCodeInfo).scan <- true
+		res.Data().(*qrenCodeInfo).isScan = true
+		w.Write([]byte("scan success!"))
+		fmt.Println("scan success!")
 	}
 }
 
 func Login(w http.ResponseWriter, r *http.Request) {
+	r.ParseForm()
 	if r.Method == "GET" {
+		uuid := r.URL.Query().Get("uuid")
+		tip := r.URL.Query().Get("tip")
 
+		//fmt.Printf("uuid=%s\ntip=%s\n", uuid, tip)
+		if uuid == "" || tip == "" {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+
+		res, err := cache.Value(uuid)
+		if err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+
+		if tip == "0" { // query scan status
+			if !res.Data().(*qrenCodeInfo).isScan {
+				select {
+				case <-res.Data().(*qrenCodeInfo).scan:
+					w.WriteHeader(http.StatusOK)
+					w.Header().Set("Content-Type", "application/javascript")
+					w.Write([]byte("window.code=201;"))
+					return
+				case <-time.After(20 * time.Second):
+					w.WriteHeader(http.StatusOK)
+					w.Header().Set("Content-Type", "application/javascript")
+					w.Write([]byte("window.code=408;"))
+				}
+			}
+			return
+		} else if tip == "1" { // query authorization status
+			// todo
+		}
 	}
+
 }
 
 func Qrcode(w http.ResponseWriter, r *http.Request) {
-	qrcodeName := r.URL.Path[len("/qrcode/"):]
-	res, err := cache.Value(qrcodeName)
-
-	if err != nil {
-		w.WriteHeader(http.StatusNotFound)
-		w.Write([]byte("404 NotFound"))
-		return
-	}
 
 	if r.Method == "GET" {
-		w.Header().Add("Content-Type", "image/png")
+		uid := r.URL.Path[len("/qrcode/"):]
+		res, err := cache.Value(uid)
+		if err != nil {
+			w.WriteHeader(http.StatusNotFound)
+			w.Write([]byte("404 NotFound"))
+			return
+		}
+		w.Header().Set("Content-Type", "image/png")
 		w.Write(res.Data().(*qrenCodeInfo).data)
-	} else if r.Method == "POST" {
-		// mark qrcode scaned
-		res.Data().(*qrenCodeInfo).isScan = true
+
 	}
 }
 
 func main() {
 	cache = cache2go.Cache("table")
+	cache.SetAboutToDeleteItemCallback(func(e *cache2go.CacheItem) {
+		close(e.Data().(*qrenCodeInfo).scan)
+	})
+
 	r := mux.NewRouter()
 	r.HandleFunc("/", Index)
 	r.HandleFunc("/qrcode/{name}", Qrcode)
-	r.HandleFunc("/l/{uid}", Login)
+	r.HandleFunc("/login", Login)
+	r.HandleFunc("/l/{uuid}", ScanQRCode)
+	r.HandleFunc("/jslogin", JsLogin)
+	r.PathPrefix("/res/").Handler(http.FileServer(http.Dir(".")))
 	http.Handle("/", r)
 	err := http.ListenAndServe(":8080", nil)
 	if err != nil {
