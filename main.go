@@ -64,7 +64,7 @@ func JsLogin(w http.ResponseWriter, r *http.Request) {
 
 		cache.Cache(string(uid), 5*time.Minute, &value)
 
-		respTpl := "window.code=%d; window.uuid='%s';"
+		respTpl := "window.QRLogin.code=%d; window.QRLogin.uuid='%s';"
 		resp := fmt.Sprintf(respTpl, 200, string(uid))
 
 		w.Header().Set("Content-Type", "application/javascript")
