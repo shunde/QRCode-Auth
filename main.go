@@ -1,11 +1,15 @@
 package main
 
 import (
+	"bytes"
+	"encoding/base64"
 	"fmt"
 	"github.com/gorilla/mux"
 	"github.com/rif/cache2go"
 	"github.com/shunde/QRCode-Auth/uuid"
+	"github.com/shunde/avatar-go/avatar"
 	"github.com/shunde/rsc/qr"
+	"image/png"
 	"io/ioutil"
 	"log"
 	"net/http"
@@ -146,8 +150,19 @@ func Login(w http.ResponseWriter, r *http.Request) {
 				case <-res.Data().(*qrenCodeInfo).scan:
 					w.WriteHeader(http.StatusOK)
 					w.Header().Set("Content-Type", "application/javascript")
-					w.Write([]byte("window.code=201;"))
-					// todo: add scanby info and user avatar
+
+					user, err := userCache.Value(res.Data().(*qrenCodeInfo).scanBy)
+					if err != nil {
+						// todo
+						w.Write([]byte("window.code=201;"))
+						return
+					}
+
+					respTemplate := "window.code=%d; window.userAvatar='data:img/png;base64,%s'"
+					pngCoding := base64.StdEncoding.EncodeToString(user.Data().(*userInfo).avatar)
+					resp := fmt.Sprintf(respTemplate, 201, pngCoding)
+					w.Write([]byte(resp))
+
 				case <-time.After(20 * time.Second):
 					w.WriteHeader(http.StatusOK)
 					w.Header().Set("Content-Type", "application/javascript")
@@ -217,6 +232,10 @@ func predefineUser() {
 	}
 
 	for i := 0; i < len(users); i++ {
+		buf := bytes.NewBuffer([]byte{})
+		m := avatar.NewAvatar(users[i].name)
+		png.Encode(buf, m)
+		users[i].avatar = buf.Bytes()
 		userCache.Cache(strconv.Itoa(i), 0, users[i])
 	}
 }

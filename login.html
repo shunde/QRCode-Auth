@@ -20,9 +20,18 @@
 <script type="text/javascript">
 var app = angular.module('myApp', []);
 
+app.config( [
+    '$compileProvider',
+    function( $compileProvider )
+    {   
+        $compileProvider.imgSrcSanitizationWhitelist(/^\s*(https?|data):/);
+    }
+    ]);
+
 app.controller('loginController', function($scope, $http, $timeout) {
     $scope.isScan = false;
     window.QRLogin = {};
+
 
     var newUuid = function() {
         $http({
@@ -45,6 +54,9 @@ app.controller('loginController', function($scope, $http, $timeout) {
             eval(response);
             if (window.code == 201) {
                 $scope.isScan = true;
+                if (window.userAvatar) {
+                    $scope.userAvatar = window.userAvatar;
+                }
             } else if (window.code == 408) {
                 tryCount++;
                 if (tryCount == 5) {
